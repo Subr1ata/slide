@@ -1,12 +1,13 @@
 import {
   createChatHistory,
+  getAutomationIDFromPostID,
   getChatHistory,
   getKeywordAutomation,
   getKeywordPost,
   matchKeyword,
   trackResponses,
 } from "@/actions/webhooks/queries";
-import { sendDM } from "@/lib/fetch";
+import { sendDM, sendPrivateMessage } from "@/lib/fetch";
 import { NextRequest, NextResponse } from "next/server";
 import { client } from "@/lib/prisma";
 import { groqai } from "@/lib/groqai";
@@ -31,11 +32,13 @@ export async function POST(req: NextRequest) {
       matcher = await matchKeyword(
         webhook_payload.entry[0].changes[0].value.text
       );
+      console.log("🔴 matcher ---> ", matcher);
     }
 
     if (matcher && matcher.automationId) {
       //We have  a keyword matcher
       if (webhook_payload.entry[0].messaging) {
+        console.log("🔴 if cond 3-1 ---> ");
         const automation = await getKeywordAutomation(
           matcher.automationId,
           true
@@ -52,6 +55,7 @@ export async function POST(req: NextRequest) {
               automation.listener.prompt,
               automation.User?.integrations[0].token!
             ); // Send a direct message to the user
+            console.log("🔴 direct_message 1 ---> ", direct_message);
 
             if (direct_message.status === 200) {
               const tracked = await trackResponses(automation.id, "DM"); //query action
@@ -71,6 +75,7 @@ export async function POST(req: NextRequest) {
             automation.listener.listener === "SMARTAI" &&
             automation.User?.subscription?.plan === "PRO"
           ) {
+            let no_response = "";
             const smart_ai_message = await groqai.chat.completions.create({
               messages: [
                 {
@@ -81,7 +86,22 @@ export async function POST(req: NextRequest) {
               model: "llama3-8b-8192",
             });
 
-            if (smart_ai_message.choices[0].message.content) {
+            console.log(
+              "🔴 smart_ai_message ---> ",
+              smart_ai_message.choices[0].message,
+              automation.listener.prompt
+            );
+
+            if (!smart_ai_message.choices[0].message.content) {
+              no_response = "Sorry, I do not understand, please elaborate!";
+            }
+
+            console.log("🔴 no_response ---> ", no_response);
+            if (smart_ai_message.choices[0].message.content || no_response) {
+              console.log(
+                "🔴 smart_ai_message.choices[0].message.content ---> ",
+                smart_ai_message.choices[0].message.content
+              );
               const reciever = createChatHistory(
                 automation.id,
                 webhook_payload.entry[0].id,
@@ -93,7 +113,7 @@ export async function POST(req: NextRequest) {
                 automation.id,
                 webhook_payload.entry[0].id,
                 webhook_payload.entry[0].messaging[0].sender.id,
-                smart_ai_message.choices[0].message.content
+                smart_ai_message.choices[0].message.content ?? no_response
               );
 
               await client.$transaction([reciever, sender]);
@@ -101,9 +121,11 @@ export async function POST(req: NextRequest) {
               const direct_message = await sendDM(
                 webhook_payload.entry[0].id,
                 webhook_payload.entry[0].messaging[0].sender.id,
-                smart_ai_message.choices[0].message.content,
+                smart_ai_message.choices[0].message.content ?? no_response,
                 automation.User.integrations[0].token
               );
+              no_response = "";
+              console.log("🔴 direct_message 2 ---> ", direct_message);
 
               if (direct_message.status === 200) {
                 const tracked = await trackResponses(automation.id, "DM");
@@ -123,25 +145,46 @@ export async function POST(req: NextRequest) {
         webhook_payload.entry[0].changes &&
         webhook_payload.entry[0].changes[0].field === "comments"
       ) {
+        console.log("🔴 if cond 3-2 ---> ");
         const automation = await getKeywordAutomation(
           matcher.automationId,
           false
         );
 
+        const automationID = await getAutomationIDFromPostID(
+          webhook_payload.entry[0].changes[0].value.media.id
+        );
+        console.log("🔴 automationID ---> ", automationID);
+
         const automations_post = await getKeywordPost(
           webhook_payload.entry[0].changes[0].value.media.id,
           automation?.id!
         );
-
+        console.log(
+          "🔴 automation, automations_post ---> ",
+          webhook_payload.entry[0].changes[0].value.media.id,
+          automation?.id!,
+          automations_post
+        );
         if (automation && automations_post && automation.trigger) {
+          console.log("🔴 if cond 3-2-1 ---> ");
           if (automation.listener) {
+            console.log("🔴 if cond 3-2-2 ---> ");
             if (automation.listener.listener === "MESSAGE") {
-              const direct_message = await sendDM(
+              console.log("🔴 if cond 3-2-3 ---> ");
+              // const direct_message = await sendDM(
+              //   webhook_payload.entry[0].id,
+              //   webhook_payload.entry[0].changes[0].value.from.id,
+              //   automation.listener?.prompt,
+              //   automation.User?.integrations[0].token!
+              // );
+              const direct_message = await sendPrivateMessage(
                 webhook_payload.entry[0].id,
-                webhook_payload.entry[0].changes[0].value.from.id,
+                webhook_payload.entry[0].changes[0].value.id,
                 automation.listener?.prompt,
                 automation.User?.integrations[0].token!
               );
+              console.log("🔴 direct_message 3 ---> ", direct_message);
               if (direct_message.status === 200) {
                 const tracked = await trackResponses(automation.id, "COMMENT");
 
@@ -184,12 +227,19 @@ export async function POST(req: NextRequest) {
 
                 await client.$transaction([receiver, sender]);
 
-                const direct_message = await sendDM(
+                // const direct_message = await sendDM(
+                //   webhook_payload.entry[0].id,
+                //   webhook_payload.entry[0].changes[0].value.from.id,
+                //   smart_ai_message.choices[0].message.content,
+                //   automation.User.integrations[0].token
+                // );
+                const direct_message = await sendPrivateMessage(
                   webhook_payload.entry[0].id,
-                  webhook_payload.entry[0].changes[0].value.from.id,
-                  smart_ai_message.choices[0].message.content,
-                  automation.User.integrations[0].token
+                  webhook_payload.entry[0].changes[0].value.id,
+                  automation.listener?.prompt,
+                  automation.User?.integrations[0].token!
                 );
+                console.log("🔴 direct_message 4 ---> ", direct_message);
 
                 if (direct_message.status === 200) {
                   const tracked = await trackResponses(
@@ -214,6 +264,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!matcher) {
+      console.log("🔴 if cond 3-3 ---> ");
       const customer_history = await getChatHistory(
         webhook_payload.entry[0].messaging[0].recipient.id,
         webhook_payload.entry[0].messaging[0].sender.id
@@ -255,7 +306,9 @@ export async function POST(req: NextRequest) {
               webhook_payload.entry[0].messaging[0].sender.id,
               smart_ai_message.choices[0].message.content
             );
+
             await client.$transaction([receiver, sender]);
+
             const direct_message = await sendDM(
               webhook_payload.entry[0].id,
               webhook_payload.entry[0].messaging[0].sender.id,
@@ -282,12 +335,17 @@ export async function POST(req: NextRequest) {
         {
           message: "No automation set",
         },
-        { status: 404 }
+        { status: 200 }
       );
     }
 
-    return NextResponse.json({ message: "No automation set" }, { status: 404 });
+    return NextResponse.json({ message: "No automation set" }, { status: 200 });
   } catch (error) {
-    return NextResponse.json({ message: "No automation set" }, { status: 500 });
+    return NextResponse.json(
+      {
+        message: "No automation set",
+      },
+      { status: 200 }
+    );
   }
 }

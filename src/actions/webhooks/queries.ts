@@ -5,7 +5,7 @@ export const matchKeyword = async (keyword: string) => {
     where: {
       word: {
         equals: keyword,
-        mode: "insensitive",
+        mode: "default",
       },
     },
   });
@@ -91,6 +91,15 @@ export const createChatHistory = (
         },
       },
     },
+  });
+};
+
+export const getAutomationIDFromPostID = async (postId: string) => {
+  const post = await client.post.findFirst({
+    where: {
+      AND: [{ postid: postId }],
+    },
+    select: { automationId: true },
   });
 };
 
